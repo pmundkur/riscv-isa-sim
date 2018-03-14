@@ -20,6 +20,8 @@
 #include "softfloat_types.h"
 #include "specialize.h"
 #include <cinttypes>
+#include <cstdlib>
+#include <cstdio>
 
 typedef int64_t sreg_t;
 typedef uint64_t reg_t;
@@ -113,8 +115,10 @@ class regfile_t
 public:
   void write(size_t i, T value)
   {
-    if (!zero_reg || i != 0)
+    if (!zero_reg || i != 0) {
       data[i] = value;
+      fprintf(stderr, "x%ld <- 0x%016" PRIx64 "\n", i, value);
+    }
   }
   const T& operator [] (size_t i) const
   {

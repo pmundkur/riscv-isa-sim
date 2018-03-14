@@ -1,5 +1,6 @@
 #include "devices.h"
 #include "processor.h"
+#include <iostream>
 
 clint_t::clint_t(std::vector<processor_t*>& procs)
   : procs(procs), mtimecmp(procs.size())
@@ -22,23 +23,51 @@ clint_t::clint_t(std::vector<processor_t*>& procs)
 
 bool clint_t::load(reg_t addr, size_t len, uint8_t* bytes)
 {
+  uint8_t *p;
   if (addr >= MSIP_BASE && addr + len <= MSIP_BASE + procs.size()*sizeof(msip_t)) {
     std::vector<msip_t> msip(procs.size());
     for (size_t i = 0; i < procs.size(); ++i)
       msip[i] = !!(procs[i]->state.mip & MIP_MSIP);
+    p = (uint8_t*)&msip[0] + addr - MSIP_BASE;
     memcpy(bytes, (uint8_t*)&msip[0] + addr - MSIP_BASE, len);
   } else if (addr >= MTIMECMP_BASE && addr + len <= MTIMECMP_BASE + procs.size()*sizeof(mtimecmp_t)) {
+    p = (uint8_t*)&mtimecmp[0] + addr - MTIMECMP_BASE;
     memcpy(bytes, (uint8_t*)&mtimecmp[0] + addr - MTIMECMP_BASE, len);
   } else if (addr >= MTIME_BASE && addr + len <= MTIME_BASE + sizeof(mtime_t)) {
+    p = (uint8_t*)&mtime + addr - MTIME_BASE;
     memcpy(bytes, (uint8_t*)&mtime + addr - MTIME_BASE, len);
   } else {
     return false;
+  }
+  if (len == 4) {
+    uint32_t val = *(uint32_t *)p;
+    std::cerr << "clint:load(addr=0x" << std::hex << addr << ", len=0x" << len << ") -> 0x"
+              << val << std::endl;
+  } else if (len == 8) {
+    uint64_t val = *(uint64_t *)p;
+    std::cerr << "clint:load(addr=0x" << std::hex << addr << ", len=0x" << len << ") -> 0x"
+              << val << std::endl;
+  } else {
+    std::cerr << "clint:load(addr=0x" << std::hex << addr << ", len=0x" << len << ") -> 0x????????"
+              << std::endl;
   }
   return true;
 }
 
 bool clint_t::store(reg_t addr, size_t len, const uint8_t* bytes)
 {
+  if (len == 4) {
+    uint32_t val = *(uint32_t *)bytes;
+    std::cerr << "clint:store(addr=0x" << std::hex << addr << ", len=0x" << len << ") <- 0x"
+              << val << std::endl;
+  } else if (len == 8) {
+    uint64_t val = *(uint64_t *)bytes;
+    std::cerr << "clint:store(addr=0x" << std::hex << addr << ", len=0x" << len << ") <- 0x"
+              << val << std::endl;
+  } else {
+    std::cerr << "clint:store(addr=0x" << std::hex << addr << ", len=0x" << len << ") <- 0x????????"
+              << std::endl;
+  }
   if (addr >= MSIP_BASE && addr + len <= MSIP_BASE + procs.size()*sizeof(msip_t)) {
     std::vector<msip_t> msip(procs.size());
     std::vector<msip_t> mask(procs.size(), 0);
@@ -64,9 +93,13 @@ bool clint_t::store(reg_t addr, size_t len, const uint8_t* bytes)
 void clint_t::increment(reg_t inc)
 {
   mtime += inc;
+  std::cerr << "clint::tick mtime <- 0x" << std::hex << mtime << std::endl;
   for (size_t i = 0; i < procs.size(); i++) {
     procs[i]->state.mip &= ~MIP_MTIP;
-    if (mtime >= mtimecmp[i])
+    if (mtime >= mtimecmp[i]) {
       procs[i]->state.mip |= MIP_MTIP;
+      if (mtimecmp[i])
+        std::cerr << "clint:increment(inc=0x" << std::hex << inc << "): firing timer intr at mtime " << mtime << std::endl;
+    }
   }
 }

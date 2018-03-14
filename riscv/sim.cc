@@ -36,8 +36,11 @@ sim_t::sim_t(const char* isa, size_t nprocs, bool halted, reg_t start_pc,
 {
   signal(SIGINT, &handle_signal);
 
-  for (auto& x : mems)
+  for (auto& x : mems) {
+    std::cerr << "Adding mem device @0x" << std::hex << x.first
+              << " size:0x" << x.second->size() << std::endl;
     bus.add_device(x.first, x.second);
+  }
 
   debug_module.add_device(&bus);
 
@@ -59,6 +62,9 @@ sim_t::sim_t(const char* isa, size_t nprocs, bool halted, reg_t start_pc,
   }
 
   clint.reset(new clint_t(procs));
+  std::cerr << "Adding clint device @0x" << std::hex << CLINT_BASE
+            << " size:0x" << clint.get()->size() << std::endl;
+
   bus.add_device(CLINT_BASE, clint.get());
 }
 
@@ -98,23 +104,41 @@ int sim_t::run()
   return htif_t::run();
 }
 
+// void sim_t::step(size_t n)
+// {
+//   for (size_t i = 0, steps = 0; i < n; i += steps)
+//   {
+//     steps = std::min(n - i, INTERLEAVE - current_step);
+//     procs[current_proc]->step(steps);
+
+//     current_step += steps;
+//     if (current_step == INTERLEAVE)
+//     {
+//       current_step = 0;
+//       procs[current_proc]->yield_load_reservation();
+//       if (++current_proc == procs.size()) {
+//         current_proc = 0;
+//         clint->increment(INTERLEAVE / INSNS_PER_RTC_TICK);
+//       }
+
+//       host->switch_to();
+//     }
+//   }
+// }
+
 void sim_t::step(size_t n)
 {
-  for (size_t i = 0, steps = 0; i < n; i += steps)
-  {
-    steps = std::min(n - i, INTERLEAVE - current_step);
-    procs[current_proc]->step(steps);
-
-    current_step += steps;
+  for (size_t i = 0, steps = 0; i < n; i += steps) {
+    procs[current_proc]->step(1);
+    current_step += 1;
     if (current_step == INTERLEAVE)
     {
       current_step = 0;
-      procs[current_proc]->yield_load_reservation();
       if (++current_proc == procs.size()) {
         current_proc = 0;
         clint->increment(INTERLEAVE / INSNS_PER_RTC_TICK);
       }
-
+      procs[current_proc]->yield_load_reservation();
       host->switch_to();
     }
   }
@@ -187,6 +211,9 @@ void sim_t::make_dtb()
   rom.resize((rom.size() + align - 1) / align * align);
 
   boot_rom.reset(new rom_device_t(rom));
+  std::cerr << "Adding rom device @0x" << std::hex << DEFAULT_RSTVEC
+            << " size:0x" << boot_rom.get()->contents().size() << std::endl;
+
   bus.add_device(DEFAULT_RSTVEC, boot_rom.get());
 }
 

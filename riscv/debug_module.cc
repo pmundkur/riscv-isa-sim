@@ -8,6 +8,7 @@
 #include "debug_rom/debug_rom.h"
 #include "debug_rom_defines.h"
 
+#include <iostream>
 #if 0
 #  define D(x) x
 #else
@@ -95,11 +96,46 @@ void debug_module_t::reset()
 }
 
 void debug_module_t::add_device(bus_t *bus) {
+  std::cerr << "Adding debug module @0x" << std::hex << DEBUG_START
+            << " size:0x" << (DEBUG_END - DEBUG_START) << std::endl;
+  std::cerr << " raw:      0x" << std::hex
+            << (DEBUG_ROM_ENTRY - DEBUG_START)
+            << " -- 0x"
+            << ((DEBUG_ROM_ENTRY + debug_rom_raw_len) - DEBUG_START)
+            << std::endl;
+  std::cerr << " whereto:  0x" << std::hex
+            << (DEBUG_ROM_WHERETO - DEBUG_START)
+            << " -- 0x"
+            << ((DEBUG_ROM_WHERETO + 4) - DEBUG_START)
+            << std::endl;
+  std::cerr << " flags:    0x" << std::hex
+            << (DEBUG_ROM_FLAGS - DEBUG_START)
+            << " -- 0x"
+            << ((DEBUG_ROM_FLAGS + 1024) - DEBUG_START)
+            << std::endl;
+  std::cerr << " abstract: 0x" << std::hex
+            << (debug_abstract_start - DEBUG_START)
+            << " -- 0x"
+            << ((debug_abstract_start + sizeof(debug_abstract)) - DEBUG_START)
+            << std::endl;
+  std::cerr << " data:     0x" << std::hex
+            << (debug_data_start - DEBUG_START)
+            << " -- 0x"
+            << ((debug_data_start + sizeof(dmdata)) - DEBUG_START)
+            << std::endl;
+  std::cerr << " progbuf:  0x" << std::hex
+            << (debug_progbuf_start - DEBUG_START)
+            << " -- 0x"
+            << ((debug_progbuf_start + program_buffer_bytes) - DEBUG_START)
+            << std::endl;
+
+
   bus->add_device(DEBUG_START, this);
 }
 
 bool debug_module_t::load(reg_t addr, size_t len, uint8_t* bytes)
 {
+  std::cerr << "debug:load(addr=0x" << std::hex << addr << ", len=0x" << len << std::endl;
   addr = DEBUG_START + addr;
 
   if (addr >= DEBUG_ROM_ENTRY &&
@@ -141,6 +177,7 @@ bool debug_module_t::load(reg_t addr, size_t len, uint8_t* bytes)
 
 bool debug_module_t::store(reg_t addr, size_t len, const uint8_t* bytes)
 {
+  std::cerr << "debug:store(addr=0x" << std::hex << addr << ", len=0x" << len << std::endl;
   D(
       switch (len) {
         case 4:

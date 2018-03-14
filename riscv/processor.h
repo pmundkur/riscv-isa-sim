@@ -9,6 +9,9 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <cstdlib>
+#include <iostream>
+
 #include "debug_rom_defines.h"
 
 class processor_t;
@@ -197,7 +200,7 @@ public:
   }
   reg_t legalize_privilege(reg_t);
   void set_privilege(reg_t);
-  void yield_load_reservation() { state.load_reservation = (reg_t)-1; }
+  void yield_load_reservation() { state.load_reservation = (reg_t)-1; std::cerr << "reservation <- none" << std::endl; }
   void update_histogram(reg_t pc);
   const disassembler_t* get_disassembler() { return disassembler; }
 
@@ -317,7 +320,19 @@ private:
   static const size_t OPCODE_CACHE_SIZE = 8191;
   insn_desc_t opcode_cache[OPCODE_CACHE_SIZE];
 
-  void take_pending_interrupt() { take_interrupt(state.mip & state.mie); }
+  reg_t real_get_csr(int which);
+
+  void take_pending_interrupt() {
+    if (state.mip | state.mie) {
+      reg_t enabled_intrs = state.mip & state.mie;
+      if (enabled_intrs)
+        std::cerr << "enabled-interrupts 0x" << std::hex << enabled_intrs
+                  << " (mip: 0x" << state.mip << ")"
+                  << " (mie: 0x" << state.mie << ")"
+                  << std::endl;
+    }
+    take_interrupt(state.mip & state.mie);
+  }
   void take_interrupt(reg_t mask); // take first enabled interrupt in mask
   void take_trap(trap_t& t, reg_t epc); // take an exception
   void disasm(insn_t insn); // disassemble and print an instruction
@@ -336,6 +351,7 @@ private:
 
   // Track repeated executions for processor_t::disasm()
   uint64_t last_pc, last_bits, executions;
+  uint64_t insn_cnt;
 };
 
 reg_t illegal_instruction(processor_t* p, insn_t insn, reg_t pc);

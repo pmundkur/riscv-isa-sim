@@ -22,7 +22,7 @@
 processor_t::processor_t(const char* isa, simif_t* sim, uint32_t id,
         bool halt_on_reset)
   : debug(false), halt_request(false), sim(sim), ext(NULL), id(id),
-  halt_on_reset(halt_on_reset), last_pc(1), executions(1)
+    halt_on_reset(halt_on_reset), last_pc(1), executions(1), insn_cnt(0)
 {
   parse_isa_string(isa);
   register_base_instructions();
@@ -113,6 +113,7 @@ void processor_t::parse_isa_string(const char* str)
     bad_isa_string(str);
 
   max_isa = state.misa;
+  fprintf(stderr, "misa <- 0x%016" PRIx64 "\n", state.misa);
 }
 
 void state_t::reset(reg_t max_isa)
@@ -130,6 +131,7 @@ void state_t::reset(reg_t max_isa)
 void processor_t::set_debug(bool value)
 {
   debug = value;
+  mmu->set_debug(value);
   if (ext)
     ext->set_debug(value);
 }
@@ -178,8 +180,13 @@ void processor_t::take_interrupt(reg_t pending_interrupts)
   reg_t sie = get_field(state.mstatus, MSTATUS_SIE);
   reg_t s_enabled = state.prv < PRV_S || (state.prv == PRV_S && sie);
   // M-ints have highest priority; consider S-ints only if no M-ints pending
-  if (enabled_interrupts == 0)
+  if (enabled_interrupts == 0) {
     enabled_interrupts = pending_interrupts & state.mideleg & -s_enabled;
+    if (enabled_interrupts)
+      std::cerr << "no M-interrupts pending, using S-interrupts: " << std::hex << enabled_interrupts << std::endl;
+  } else {
+    std::cerr << "M-interrupts pending" << std::endl;
+  }
 
   if (state.dcsr.cause == 0 && enabled_interrupts) {
     // nonstandard interrupts have highest priority
@@ -197,6 +204,7 @@ void processor_t::take_interrupt(reg_t pending_interrupts)
     else
       abort();
 
+    std::cerr << "taking interrupts 0x" << std::hex << enabled_interrupts << std::endl;
     throw trap_t(((reg_t)1 << (max_xlen-1)) | ctz(enabled_interrupts));
   }
 }
@@ -223,10 +231,21 @@ reg_t processor_t::legalize_privilege(reg_t prv)
   return prv;
 }
 
+static const char *prv_str(uint8_t prv) {
+  switch (prv) {
+  case PRV_U: return "U";
+  case PRV_S: return "S";
+  case PRV_H: return "H";
+  case PRV_M: return "M";
+  }
+  return "?";
+}
 void processor_t::set_privilege(reg_t prv)
 {
+  uint8_t p = legalize_privilege(prv);
   mmu->flush_tlb();
-  state.prv = legalize_privilege(prv);
+  fprintf(stderr, "   core %3d: priv %s -> %s\n", id, prv_str(state.prv), prv_str(p));
+  state.prv = p;
 }
 
 void processor_t::enter_debug_mode(uint8_t cause)
@@ -241,11 +260,11 @@ void processor_t::enter_debug_mode(uint8_t cause)
 void processor_t::take_trap(trap_t& t, reg_t epc)
 {
   if (debug) {
-    fprintf(stderr, "core %3d: exception %s, epc 0x%016" PRIx64 "\n",
-            id, t.name(), epc);
+    fprintf(stderr, "[%" PRIu64 "] core %3d: exception %s, epc 0x%016" PRIx64 "\n",
+            insn_cnt, id, t.name(), epc);
     if (t.has_tval())
-      fprintf(stderr, "core %3d:           tval 0x%016" PRIx64 "\n", id,
-          t.get_tval());
+      fprintf(stderr, "[%" PRIu64 "] core %3d:           tval 0x%016" PRIx64 "\n",
+              insn_cnt, id, t.get_tval());
   }
 
   if (state.dcsr.cause) {
@@ -307,14 +326,15 @@ void processor_t::disasm(insn_t insn)
   uint64_t bits = insn.bits() & ((1ULL << (8 * insn_length(insn.bits()))) - 1);
   if (last_pc != state.pc || last_bits != bits) {
     if (executions != 1) {
-      fprintf(stderr, "core %3d: Executed %" PRIx64 " times\n", id, executions);
+      fprintf(stderr, "[%" PRIu64 "] core %3d: Executed %" PRIx64 " times\n", insn_cnt, id, executions);
     }
 
-    fprintf(stderr, "core %3d: 0x%016" PRIx64 " (0x%08" PRIx64 ") %s\n",
-            id, state.pc, bits, disassembler->disassemble(insn).c_str());
+    fprintf(stderr, "[%" PRIu64 "] core %3d [%s]: 0x%016" PRIx64 " (0x%08" PRIx64 ") %s\n",
+            insn_cnt, id, prv_str(state.prv), state.pc, bits, disassembler->disassemble(insn).c_str());
     last_pc = state.pc;
     last_bits = bits;
     executions = 1;
+    insn_cnt++;
   } else {
     executions++;
   }
@@ -331,20 +351,24 @@ void processor_t::set_csr(int which, reg_t val)
   val = zext_xlen(val);
   reg_t delegable_ints = MIP_SSIP | MIP_STIP | MIP_SEIP | (1 << IRQ_COP);
   reg_t all_ints = delegable_ints | MIP_MSIP | MIP_MTIP;
+  reg_t eff = val;  // effective value
   switch (which)
   {
     case CSR_FFLAGS:
       dirty_fp_state;
       state.fflags = val & (FSR_AEXC >> FSR_AEXC_SHIFT);
+      eff = state.fflags;
       break;
     case CSR_FRM:
       dirty_fp_state;
       state.frm = val & (FSR_RD >> FSR_RD_SHIFT);
+      eff = state.frm;
       break;
     case CSR_FCSR:
       dirty_fp_state;
       state.fflags = (val & FSR_AEXC) >> FSR_AEXC_SHIFT;
       state.frm = (val & FSR_RD) >> FSR_RD_SHIFT;
+      eff = state.fflags;
       break;
     case CSR_MSTATUS: {
       if ((val ^ state.mstatus) &
@@ -376,18 +400,22 @@ void processor_t::set_csr(int which, reg_t val)
       state.mstatus = set_field(state.mstatus, MSTATUS_SXL, xlen_to_uxl(max_xlen));
       // U-XLEN == S-XLEN == M-XLEN
       xlen = max_xlen;
+      eff = state.mstatus;
       break;
     }
     case CSR_MIP: {
       reg_t mask = MIP_SSIP | MIP_STIP;
       state.mip = (state.mip & ~mask) | (val & mask);
+      eff = state.mip;
       break;
     }
     case CSR_MIE:
       state.mie = (state.mie & ~all_ints) | (val & all_ints);
+      eff = state.mie;
       break;
     case CSR_MIDELEG:
       state.mideleg = (state.mideleg & ~delegable_ints) | (val & delegable_ints);
+      eff = state.mideleg;
       break;
     case CSR_MEDELEG: {
       reg_t mask =
@@ -398,6 +426,7 @@ void processor_t::set_csr(int which, reg_t val)
         (1 << CAUSE_LOAD_PAGE_FAULT) |
         (1 << CAUSE_STORE_PAGE_FAULT);
       state.medeleg = (state.medeleg & ~mask) | (val & mask);
+      eff = state.medeleg;
       break;
     }
     case CSR_MINSTRET:
@@ -406,10 +435,12 @@ void processor_t::set_csr(int which, reg_t val)
         state.minstret = (state.minstret >> 32 << 32) | (val & 0xffffffffU);
       else
         state.minstret = val;
+      eff = state.minstret;
       break;
     case CSR_MINSTRETH:
     case CSR_MCYCLEH:
       state.minstret = (val << 32) | (state.minstret << 32 >> 32);
+      eff = state.minstret;
       break;
     case CSR_SCOUNTEREN:
       state.scounteren = val;
@@ -437,22 +468,25 @@ void processor_t::set_csr(int which, reg_t val)
                              get_field(val, SATP64_MODE) == SATP_MODE_SV39 ||
                              get_field(val, SATP64_MODE) == SATP_MODE_SV48))
         state.satp = val & (SATP64_PPN | SATP64_MODE);
+      eff = state.satp;
       break;
     }
-    case CSR_SEPC: state.sepc = val & ~(reg_t)1; break;
-    case CSR_STVEC: state.stvec = val >> 2 << 2; break;
+    case CSR_SEPC: state.sepc = val & ~(reg_t)1; eff = state.sepc; break;
+    case CSR_STVEC: state.stvec = val >> 2 << 2; eff = state.stvec; break;
     case CSR_SSCRATCH: state.sscratch = val; break;
     case CSR_SCAUSE: state.scause = val; break;
     case CSR_STVAL: state.stval = val; break;
-    case CSR_MEPC: state.mepc = val & ~(reg_t)1; break;
-    case CSR_MTVEC: state.mtvec = val & ~(reg_t)2; break;
+    case CSR_MEPC: state.mepc = val & ~(reg_t)1; eff = state.mepc; break;
+    case CSR_MTVEC: state.mtvec = val & ~(reg_t)2; eff = state.mtvec; break;
     case CSR_MSCRATCH: state.mscratch = val; break;
     case CSR_MCAUSE: state.mcause = val; break;
     case CSR_MTVAL: state.mtval = val; break;
     case CSR_MISA: {
       // the write is ignored if increasing IALIGN would misalign the PC
-      if (!(val & (1L << ('C' - 'A'))) && (state.pc & 2))
+      if (!(val & (1L << ('C' - 'A'))) && (state.pc & 2)) {
+        eff = state.misa;
         break;
+      }
 
       if (!(val & (1L << ('F' - 'A'))))
         val &= ~(1L << ('D' - 'A'));
@@ -467,12 +501,14 @@ void processor_t::set_csr(int which, reg_t val)
       mask &= max_isa;
 
       state.misa = (val & mask) | (state.misa & ~mask);
+      eff = state.misa;
       break;
     }
     case CSR_TSELECT:
       if (val < state.num_triggers) {
         state.tselect = val;
       }
+      eff = state.tselect;
       break;
     case CSR_TDATA1:
       {
@@ -524,9 +560,19 @@ void processor_t::set_csr(int which, reg_t val)
       state.dscratch = val;
       break;
   }
+  fprintf(stderr, " CSR %s <- 0x%016" PRIx64 " (input: 0x%016" PRIx64 ")\n",
+          csr_name(which), eff, val);
 }
 
 reg_t processor_t::get_csr(int which)
+{
+  reg_t val = this->real_get_csr(which);
+  fprintf(stderr, " CSR %s -> 0x%016" PRIx64 "\n",
+          csr_name(which), val);
+  return val;
+}
+
+reg_t processor_t::real_get_csr(int which)
 {
   uint32_t ctr_en = -1;
   if (state.prv < PRV_M)

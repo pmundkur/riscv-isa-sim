@@ -97,6 +97,9 @@ void mmu_t::load_slow_path(reg_t addr, reg_t len, uint8_t* bytes)
       tracer.trace(paddr, len, LOAD);
     else
       refill_tlb(addr, paddr, host_addr, LOAD);
+    { reg_t data = reg_from_bytes(len, bytes);
+      if (debug) fprintf(stderr, " mem[V:0x%016" PRIx64 ", P:0x%016" PRIx64 "] -> 0x%016" PRIx64 "\n", addr, paddr, data);
+    }
   } else if (!sim->mmio_load(paddr, len, bytes)) {
     throw trap_load_access_fault(addr);
   }
@@ -126,6 +129,9 @@ void mmu_t::store_slow_path(reg_t addr, reg_t len, const uint8_t* bytes)
       tracer.trace(paddr, len, STORE);
     else
       refill_tlb(addr, paddr, host_addr, STORE);
+    { reg_t data = reg_from_bytes(len, bytes);
+      if (debug) fprintf(stderr, " mem[V:0x%016" PRIx64 ", P:0x%016" PRIx64 "] <- 0x%016" PRIx64 "\n", addr, paddr, data);
+    }
   } else if (!sim->mmio_store(paddr, len, bytes)) {
     throw trap_store_access_fault(addr);
   }
@@ -181,23 +187,36 @@ reg_t mmu_t::walk(reg_t addr, access_type type, reg_t mode)
 
     // check that physical address of PTE is legal
     auto ppte = sim->addr_to_mem(base + idx * vm.ptesize);
-    if (!ppte)
+    if (!ppte) {
+      fprintf(stderr, "walk(%lx): pte addr %lx is illegal\n",
+              addr, base + idx * vm.ptesize);
       goto fail_access;
+    }
 
     reg_t pte = vm.ptesize == 4 ? *(uint32_t*)ppte : *(uint64_t*)ppte;
     reg_t ppn = pte >> PTE_PPN_SHIFT;
+    fprintf(stderr, "walk(vaddr=0x%016" PRIx64 " level=%d"
+            " pt_base=0x%016" PRIx64
+            " pt_ofs=0x%016" PRIx64
+            " pte_addr=0x%016" PRIx64
+            " pte=0x%016" PRIx64 "\n",
+            addr, i, base, idx * vm.ptesize, base + idx * vm.ptesize, pte);
 
     if (PTE_TABLE(pte)) { // next level of page table
       base = ppn << PGSHIFT;
     } else if ((pte & PTE_U) ? s_mode && (type == FETCH || !sum) : !s_mode) {
+      fprintf(stderr, "walk(%lx): s-mode checks failed\n", addr);
       break;
     } else if (!(pte & PTE_V) || (!(pte & PTE_R) && (pte & PTE_W))) {
+      fprintf(stderr, "walk(%lx): valid pte checks failed\n", addr);
       break;
     } else if (type == FETCH ? !(pte & PTE_X) :
                type == LOAD ?  !(pte & PTE_R) && !(mxr && (pte & PTE_X)) :
                                !((pte & PTE_R) && (pte & PTE_W))) {
+      fprintf(stderr, "walk(%lx): pte perm checks failed\n", addr);
       break;
     } else if ((ppn & ((reg_t(1) << ptshift) - 1)) != 0) {
+      fprintf(stderr, "walk(%lx): mapping alignment check failed\n", addr);
       break;
     } else {
       reg_t ad = PTE_A | ((type == STORE) * PTE_D);
@@ -206,12 +225,16 @@ reg_t mmu_t::walk(reg_t addr, access_type type, reg_t mode)
       *(uint32_t*)ppte |= ad;
 #else
       // take exception if access or possibly dirty bit is not set.
-      if ((pte & ad) != ad)
+      if ((pte & ad) != ad) {
+        fprintf(stderr, "walk(%lx): dirty pte update needed\n", addr);
         break;
+      }
 #endif
       // for superpage mappings, make a fake leaf PTE for the TLB's benefit.
       reg_t vpn = addr >> PGSHIFT;
       reg_t value = (ppn | (vpn & ((reg_t(1) << ptshift) - 1))) << PGSHIFT;
+      fprintf(stderr, "walk(0x%016" PRIx64 ") -> 0x%016" PRIx64 "\n",
+              addr, value);
       return value;
     }
   }
