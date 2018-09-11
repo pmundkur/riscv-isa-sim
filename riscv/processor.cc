@@ -24,6 +24,7 @@ processor_t::processor_t(const char* isa, simif_t* sim, uint32_t id,
   : debug(false), halt_request(false), sim(sim), ext(NULL), id(id),
     halt_on_reset(halt_on_reset), last_pc(1), executions(1), insn_cnt(0)
 {
+  bzero(&state, sizeof(state));
   parse_isa_string(isa);
   register_base_instructions();
 
@@ -63,11 +64,11 @@ void processor_t::parse_isa_string(const char* str)
   const char* p = lowercase.c_str();
   const char* all_subsets = "imafdqc";
 
-  max_xlen = 64;
+  max_xlen = xlen = 64;
   state.misa = reg_t(2) << 62;
 
   if (strncmp(p, "rv32", 4) == 0)
-    max_xlen = 32, state.misa = reg_t(1) << 30, p += 4;
+    max_xlen = xlen = 32, state.misa = reg_t(1) << 30, p += 4;
   else if (strncmp(p, "rv64", 4) == 0)
     p += 4;
   else if (strncmp(p, "rv", 2) == 0)

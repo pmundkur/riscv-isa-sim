@@ -5,7 +5,7 @@
 #include "processor.h"
 
 mmu_t::mmu_t(simif_t* sim, processor_t* proc)
- : sim(sim), proc(proc),
+ : sim(sim), proc(proc), debug(false),
   check_triggers_fetch(false),
   check_triggers_load(false),
   check_triggers_store(false),
